@@ -446,6 +446,7 @@ def get_java_handler(zip_file_content, handler, main_file):
 
     :returns: function or flask.Response
     """
+    print('is_jar_archive', is_jar_archive(zip_file_content), handler)
     if not is_jar_archive(zip_file_content):
         with zipfile.ZipFile(BytesIO(zip_file_content)) as zip_ref:
             jar_entries = [e for e in zip_ref.infolist() if e.filename.endswith('.jar')]
