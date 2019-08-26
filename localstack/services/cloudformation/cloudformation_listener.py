@@ -1,8 +1,10 @@
 import re
 import uuid
 import logging
-from requests.models import Response
+from requests.models import Response, Request
 from six.moves.urllib import parse as urlparse
+
+from localstack.constants import TEST_AWS_ACCOUNT_ID, MOTO_ACCOUNT_ID
 from localstack.utils.aws import aws_stack
 from localstack.utils.common import to_str, obj_to_xml
 from localstack.utils.cloudformation import template_deployer
@@ -67,32 +69,23 @@ class ProxyListenerCloudFormation(ProxyListener):
             req_data = urlparse.parse_qs(to_str(data))
             action = req_data.get('Action')[0]
 
-            if action == 'DescribeStackEvents':
-                # fix an issue where moto cannot handle ARNs as stack names (or missing names)
-                stack_name = req_data.get('StackName')
-                run_fix = not stack_name
-                if stack_name:
-                    stack_name = stack_name[0]
-                    if stack_name.startswith('arn:aws:cloudformation'):
-                        run_fix = True
-                        stack_name = re.sub(r'arn:aws:cloudformation:[^:]+:[^:]+:stack/([^/]+)(/.+)?',
-                                            r'\1', stack_name)
-                if run_fix:
-                    stack_names = [stack_name] if stack_name else self._list_stack_names()
-                    client = aws_stack.connect_to_service('cloudformation')
-                    events = []
-                    for stack_name in stack_names:
-                        tmp = client.describe_stack_events(StackName=stack_name)['StackEvents'][:1]
-                        events.extend(tmp)
-                    events = [{'member': e} for e in events]
-                    response_content = '<StackEvents>%s</StackEvents>' % obj_to_xml(events)
-                    return make_response('DescribeStackEvents', response_content)
+            if action != 'ValidateTemplate':
+                data = self._reset_account_id(data)
+                return Request(data=data, headers=headers, method=method)
 
         if req_data:
             if action == 'ValidateTemplate':
                 return validate_template(req_data)
 
+
         return True
+
+    def _reset_account_id(self, data):
+        """ Fix account ID in request payload. All external-facing responses contain our
+            predefined account ID (defaults to 000000000000), whereas the backend endpoint
+            from moto expects a different hardcoded account ID (123456789012). """
+        return aws_stack.fix_account_id_in_arns(
+            data, colon_delimiter='%3A', existing=TEST_AWS_ACCOUNT_ID, replace=123456789)
 
     def return_response(self, method, path, data, headers, response):
         if response.status_code >= 400:
